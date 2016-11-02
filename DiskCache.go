@@ -2,53 +2,29 @@ package cache
 
 import (
     "io"
+    "compress/zlib"
     "io/ioutil"
     "os"
     "path/filepath"
-    "sync"
+    "fmt"
 )
 
 type DiskCache struct {
     root    string // the root directory of the file cache
     tmpRoot string // the path where files are staged to before commiting to cache
-
-    children []ReadCache
     compress bool
-    lock     sync.RWMutex
 }
 
-func NewDiskCache(root, tmp string, compress bool) *DiskCache {
-    return &DiskCache{
+func NewDiskCache(root, tmp string, compress bool) *HierarchicalCache {
+    return NewHierarchicalCache(&DiskCache {
         root:     root,
         tmpRoot:  tmp,
         compress: compress,
-        children: make([]ReadCache, 0),
-    }
+    })
 }
 
-func (dc *DiskCache) AddChild(child ReadCache) {
-    dc.lock.Lock()
-    defer dc.lock.Unlock()
-
-    dc.children = append(dc.children, child)
-}
-
-func (dc *DiskCache) RemoveChild(child ReadCache) {
-    dc.lock.Lock()
-    defer dc.lock.Unlock()
-
-    for i := range dc.children {
-        if dc.children[i] == child {
-            dc.children = append(dc.children[:i], dc.children[i+1:]...)
-        }
-    }
-}
-
-func (dc *DiskCache) ChildrenCount() int {
-    dc.lock.RLock()
-    defer dc.lock.RUnlock()
-
-    return len(dc.children)
+func (dc *DiskCache) Delete(path string, metadta interface{}) error {
+    return os.Remove(path)
 }
 
 func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
@@ -56,17 +32,19 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
     fullPath := filepath.Join(dc.root, path)
     f, err := os.Open(fullPath)
     if err == nil {
-        return NewSafeReader(f), err
-    }
-
-    dc.lock.RLock()
-    defer dc.lock.RUnlock()
-
-    // failed - try children
-    for i := range dc.children {
-        data, err := dc.children[i].Get(path, metadata)
-        if err == nil {
-            return NewCacheFiller(path, metadata, dc, data), nil
+        if dc.compress {
+            zr, err := zlib.NewReader(f)
+            if err != nil {
+                return nil, fmt.Errorf(
+                    "Cache file found (%s) but decompression failed: %v",
+                    path,
+                    err,
+                )
+            } else {
+                return NewSafeReader(zr), err
+            }
+        } else {
+            return NewSafeReader(f), err
         }
     }
 
@@ -75,9 +53,6 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
 }
 
 func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) error {
-    dc.lock.Lock()
-    defer dc.lock.Unlock()
-
     // write to a tmp file first
     err := os.MkdirAll(dc.tmpRoot, 0770)
     if err != nil {
@@ -89,13 +64,20 @@ func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) erro
         return err
     }
 
-    _, err = io.Copy(f, data)
+    var writer io.WriteCloser
+    if dc.compress {
+        writer = zlib.NewWriter(f)
+    } else {
+        writer = f
+    }
+
+    _, err = io.Copy(writer, data)
     if err != nil {
-        f.Close()
+        writer.Close()
         return err
     }
 
-    f.Close()
+    writer.Close()
     return dc.commit(f.Name(), path)
 }
 

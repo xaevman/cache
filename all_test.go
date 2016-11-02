@@ -74,13 +74,16 @@ func TestDiskCacheChildren(t *testing.T) {
     dc1 := NewDiskCache("cache1", "tmp1", false)
     dc2 := NewDiskCache("cache2", "tmp2", false)
 
-    dc1.AddChild(dc2)
-    if dc1.ChildrenCount() != 1 {
-        t.Fatal()
+    err := dc1.AddChild(dc2)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
     }
 
     dc1.RemoveChild(dc2)
-    if dc1.ChildrenCount() != 0 {
+    if len(dc1.readers) != 0 {
+        t.Fatal()
+    }
+    if len(dc1.writers) != 0 {
         t.Fatal()
     }
 }
@@ -171,6 +174,34 @@ func TestChildFill(t *testing.T) {
     checkData(d2, t)
 }
 
+func TestCompression(t *testing.T) {
+    err := clean(1)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    f, err := os.Open(TestFilePath)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    reader := NewSafeReader(f)
+
+    dc1 := NewDiskCache("cache1", "tmp1", true)
+
+    err = dc1.Put(TestCachePath, nil, reader)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    data, err := dc1.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    checkData(data, t)
+}
+
 func TestDataNotFound(t *testing.T) {
     dc1 := NewDiskCache("cache1", "tmp1", false)
 
@@ -178,6 +209,31 @@ func TestDataNotFound(t *testing.T) {
     if err == nil {
         t.Fatal()
     }
+}
+
+func TestMemCache(t *testing.T) {
+    dc := NewDiskCache("cache1", "tmp1", true)
+    mc := NewMemoryCache()
+
+    mc.AddChild(dc)
+
+    // should bubble up from file cache
+    d1, err := mc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    // check the returned data
+    checkData(d1, t)
+
+    // should come from RAM
+    d2, err := mc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    // check the data that was populated into dc3 cache
+    checkData(d2, t)
 }
 
 func makeTestFile() error {
