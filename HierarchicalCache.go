@@ -8,18 +8,36 @@ import (
 )
 
 type HierarchicalCache struct {
-    parentCache RWCache
-    readers     []ReadCache
-    writers     []WriteCache
-    lock        sync.RWMutex
+    deletethrough bool
+    parentCache   RWCache
+    readers       []ReadCache
+    writers       []WriteCache
+    writethrough  bool
+    lock          sync.RWMutex
 }
 
 func NewHierarchicalCache(cache RWCache) *HierarchicalCache {
     return &HierarchicalCache{
-        parentCache: cache,
-        readers:     make([]ReadCache, 0),
-        writers:     make([]WriteCache, 0),
+        deletethrough: false,
+        parentCache:   cache,
+        readers:       make([]ReadCache, 0),
+        writers:       make([]WriteCache, 0),
+        writethrough:  true,
     }
+}
+
+func (hc *HierarchicalCache) SetDeleteThrough(enabled bool) {
+    hc.lock.Lock()
+    defer hc.lock.Unlock()
+
+    hc.deletethrough = enabled
+}
+
+func (hc *HierarchicalCache) SetWriteThrough(enabled bool) {
+    hc.lock.Lock()
+    defer hc.lock.Unlock()
+
+    hc.writethrough = enabled
 }
 
 func (hc *HierarchicalCache) AddChild(child interface{}) error {
@@ -69,13 +87,15 @@ func (hc *HierarchicalCache) Delete(key string, metadata interface{}) error {
         return err
     }
 
-    hc.lock.Lock()
-    defer hc.lock.Unlock()
+    if hc.deletethrough {
+        hc.lock.Lock()
+        defer hc.lock.Unlock()
 
-    for i := range hc.writers {
-        err := hc.writers[i].Delete(key, metadata)
-        if err != nil {
-            return err
+        for i := range hc.writers {
+            err := hc.writers[i].Delete(key, metadata)
+            if err != nil {
+                return err
+            }
         }
     }
 
@@ -119,11 +139,12 @@ func (hc *HierarchicalCache) Put(path string, metadata interface{}, data io.Read
         return err
     }
 
-    // write-through
-    for i := range hc.writers {
-        err = hc.writers[i].Put(path, metadata, bytes.NewReader(buffer.Bytes()))
-        if err != nil {
-            return err
+    if hc.writethrough {
+        for i := range hc.writers {
+            err = hc.writers[i].Put(path, metadata, bytes.NewReader(buffer.Bytes()))
+            if err != nil {
+                return err
+            }
         }
     }
 

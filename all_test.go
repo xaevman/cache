@@ -299,6 +299,7 @@ func TestScavenger(t *testing.T) {
 
     dc := NewDiskCache("cache1", "tmp1", false)
     mc := NewMemoryCache()
+    mc.SetDeleteThrough(true)
     mc.AddChild(dc)
 
     cache := NewScavenger(
@@ -369,6 +370,7 @@ func TestScavengerDelete(t *testing.T) {
 
     dc := NewDiskCache("cache1", "tmp1", false)
     mc := NewMemoryCache()
+    mc.SetDeleteThrough(true)
     mc.AddChild(dc)
 
     cache := NewScavenger(
