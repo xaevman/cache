@@ -1,9 +1,10 @@
 package cache
 
 import (
-    "sync"
+    "bytes"
     "fmt"
     "io"
+    "sync"
 )
 
 type HierarchicalCache struct {
@@ -14,10 +15,10 @@ type HierarchicalCache struct {
 }
 
 func NewHierarchicalCache(cache RWCache) *HierarchicalCache {
-    return &HierarchicalCache {
-        parentCache : cache,
-        readers     : make([]ReadCache, 0),
-        writers     : make([]WriteCache, 0),
+    return &HierarchicalCache{
+        parentCache: cache,
+        readers:     make([]ReadCache, 0),
+        writers:     make([]WriteCache, 0),
     }
 }
 
@@ -63,7 +64,22 @@ func (hc *HierarchicalCache) RemoveChild(child interface{}) {
 }
 
 func (hc *HierarchicalCache) Delete(key string, metadata interface{}) error {
-    return hc.parentCache.Delete(key, metadata)
+    err := hc.parentCache.Delete(key, metadata)
+    if err != nil {
+        return err
+    }
+
+    hc.lock.Lock()
+    defer hc.lock.Unlock()
+
+    for i := range hc.writers {
+        err := hc.writers[i].Delete(key, metadata)
+        if err != nil {
+            return err
+        }
+    }
+
+    return nil
 }
 
 func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, error) {
@@ -92,13 +108,20 @@ func (hc *HierarchicalCache) Put(path string, metadata interface{}, data io.Read
     hc.lock.Lock()
     defer hc.lock.Unlock()
 
-    err := hc.parentCache.Put(path, metadata, data)
+    var buffer bytes.Buffer
+    _, err := io.Copy(&buffer, data)
     if err != nil {
         return err
     }
 
+    err = hc.parentCache.Put(path, metadata, bytes.NewReader(buffer.Bytes()))
+    if err != nil {
+        return err
+    }
+
+    // write-through
     for i := range hc.writers {
-        err = hc.writers[i].Put(path, metadata, data)
+        err = hc.writers[i].Put(path, metadata, bytes.NewReader(buffer.Bytes()))
         if err != nil {
             return err
         }

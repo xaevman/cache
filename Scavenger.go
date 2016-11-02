@@ -18,11 +18,12 @@ type Scavenger struct {
 }
 
 func NewScavenger(parent RWCache, intervalSec, maxAgeSec int) *Scavenger {
-    ns := &Scavenger {
-        intervalSec : intervalSec,
-        maxAgeSec   : maxAgeSec,
-        parentCache : parent,
-        shutdown    : make(chan chan interface{}, 0),
+    ns := &Scavenger{
+        data:        make(map[string]time.Time),
+        intervalSec: intervalSec,
+        maxAgeSec:   maxAgeSec,
+        parentCache: parent,
+        shutdown:    make(chan chan interface{}, 0),
     }
 
     ns.run()
@@ -31,6 +32,8 @@ func NewScavenger(parent RWCache, intervalSec, maxAgeSec int) *Scavenger {
 }
 
 func (s *Scavenger) Delete(key string, metadata interface{}) error {
+    Log.Debug("Scavenger::Delete %s", key)
+
     s.lock.Lock()
     defer s.lock.Unlock()
 
@@ -40,6 +43,8 @@ func (s *Scavenger) Delete(key string, metadata interface{}) error {
 }
 
 func (s *Scavenger) Get(key string, metadata interface{}) (io.Reader, error) {
+    Log.Debug("Scavenger::Get %s", key)
+
     s.lock.RLock()
     defer s.lock.RUnlock()
 
@@ -49,6 +54,8 @@ func (s *Scavenger) Get(key string, metadata interface{}) (io.Reader, error) {
 }
 
 func (s *Scavenger) Put(key string, metadata interface{}, data io.Reader) error {
+    Log.Debug("Scavenger::Put %s", key)
+
     s.lock.Lock()
     defer s.lock.Unlock()
 
@@ -61,9 +68,11 @@ func (s *Scavenger) Shutdown() {
     scc := make(chan interface{}, 0)
 
     // signal shutdown
-    s.shutdown<- scc
+    Log.Debug("Signaling shutdown")
+    s.shutdown <- scc
 
     // wait for shutdown to complete
+    Log.Debug("Shutdown complete")
     <-scc
 }
 
@@ -74,7 +83,7 @@ func (s *Scavenger) scavenge() {
     Log.Debug("Scavenging cache records")
 
     deletes := make([]string, 0)
-    cutoff := time.Now().Add(time.Duration(-s.maxAgeSec) * time.Second)
+    cutoff := time.Now().Add(-time.Duration(s.maxAgeSec) * time.Second)
 
     for k := range s.data {
         if s.data[k].Before(cutoff) {
@@ -85,6 +94,7 @@ func (s *Scavenger) scavenge() {
     for i := range deletes {
         Log.Debug("Removing record %s", deletes[i])
         delete(s.data, deletes[i])
+        s.parentCache.Delete(deletes[i], nil)
     }
 }
 
@@ -93,17 +103,18 @@ func (s *Scavenger) run() {
         defer crash.HandleAll()
 
         // shutdown complete channel
+        run := true
         var scc chan interface{}
 
-        for {
+        for run {
             select {
             case <-time.After(time.Duration(s.intervalSec) * time.Second):
                 s.scavenge()
             case scc = <-s.shutdown:
-                break
+                run = false
             }
         }
 
-        scc<- nil
+        scc <- nil
     }()
 }

@@ -21,17 +21,29 @@ import (
     "os"
     "path/filepath"
     "testing"
+    "time"
 )
 
 const TestFileSize = 64 * 1024
 
 var (
-    TestFilePath  string
-    TestFileHash  string
-    TestCachePath = filepath.Join("dir", "test.file")
+    ScavIntervalSec = 1
+    ScavMaxAgeSec   = 2
+    TestFilePath    string
+    TestFileHash    string
+    TestCachePath   = filepath.Join("dir", "test.file")
 )
 
+type TestLogger struct{}
+
+func (tl *TestLogger) Debug(format string, v ...interface{}) {
+
+    fmt.Printf(fmt.Sprintf("%s\n", format), v...)
+}
+
 func TestMain(m *testing.M) {
+    Log = &TestLogger{}
+
     for i := 1; i <= 3; i++ {
         err := clean(i)
         if err != nil {
@@ -110,6 +122,13 @@ func TestDiskCachePut(t *testing.T) {
     }
 
     checkData(NewSafeReader(f2), t)
+
+    data, err := dc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    checkData(data, t)
 }
 
 func TestDiskCacheGet(t *testing.T) {
@@ -227,6 +246,7 @@ func TestMemCache(t *testing.T) {
     checkData(d1, t)
 
     // should come from RAM
+    mc.RemoveChild(dc)
     d2, err := mc.Get(TestCachePath, nil)
     if err != nil {
         t.Fatalf("Error: %v", err)
@@ -234,6 +254,179 @@ func TestMemCache(t *testing.T) {
 
     // check the data that was populated into dc3 cache
     checkData(d2, t)
+}
+
+func TestWriteThrough(t *testing.T) {
+    clean(1)
+
+    dc := NewDiskCache("cache1", "tmp1", true)
+    mc := NewMemoryCache()
+
+    mc.AddChild(dc)
+
+    f, err := os.Open(TestFilePath)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    reader := NewSafeReader(f)
+
+    err = mc.Put(TestCachePath, nil, reader)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    data, err := dc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    checkData(data, t)
+
+    data, err = mc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    checkData(data, t)
+}
+
+func TestScavenger(t *testing.T) {
+    err := clean(1)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    dc := NewDiskCache("cache1", "tmp1", false)
+    mc := NewMemoryCache()
+    mc.AddChild(dc)
+
+    cache := NewScavenger(
+        mc,
+        ScavIntervalSec,
+        ScavMaxAgeSec,
+    )
+
+    f, err := os.Open(TestFilePath)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    reader := NewSafeReader(f)
+
+    // put a record in the cache
+    err = cache.Put(TestCachePath, nil, reader)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    // check to make sure it made it everywhere via write-through
+    data, err := dc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    checkData(data, t)
+
+    data, err = mc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    checkData(data, t)
+
+    data, err = cache.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    checkData(data, t)
+
+    // wait for scavenger to run
+    <-time.After(time.Duration(ScavMaxAgeSec+2) * time.Second)
+
+    // record should be gone now
+    _, err = dc.Get(TestCachePath, nil)
+    if err == nil {
+        t.Fatal()
+    }
+
+    _, err = mc.Get(TestCachePath, nil)
+    if err == nil {
+        t.Fatal()
+    }
+
+    _, err = cache.Get(TestCachePath, nil)
+    if err == nil {
+        t.Fatal()
+    }
+
+    cache.Shutdown()
+}
+
+func TestScavengerDelete(t *testing.T) {
+    err := clean(1)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    dc := NewDiskCache("cache1", "tmp1", false)
+    mc := NewMemoryCache()
+    mc.AddChild(dc)
+
+    cache := NewScavenger(
+        mc,
+        ScavIntervalSec,
+        ScavMaxAgeSec,
+    )
+
+    f, err := os.Open(TestFilePath)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    reader := NewSafeReader(f)
+
+    err = cache.Put(TestCachePath, nil, reader)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    data, err := dc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    checkData(data, t)
+
+    data, err = mc.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    checkData(data, t)
+
+    data, err = cache.Get(TestCachePath, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    checkData(data, t)
+
+    // manual delete
+    cache.Delete(TestCachePath, nil)
+
+    // record should be gone now
+    _, err = dc.Get(TestCachePath, nil)
+    if err == nil {
+        t.Fatal()
+    }
+
+    _, err = mc.Get(TestCachePath, nil)
+    if err == nil {
+        t.Fatal()
+    }
+
+    _, err = cache.Get(TestCachePath, nil)
+    if err == nil {
+        t.Fatal()
+    }
+
+    cache.Shutdown()
 }
 
 func makeTestFile() error {

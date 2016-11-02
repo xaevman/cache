@@ -32,4 +32,4 @@ _testmain.go
 !/.gitignore
 /cache*/
 /tmp*/
-coverage.out
+*.cover

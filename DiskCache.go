@@ -1,22 +1,22 @@
 package cache
 
 import (
-    "io"
     "compress/zlib"
+    "fmt"
+    "io"
     "io/ioutil"
     "os"
     "path/filepath"
-    "fmt"
 )
 
 type DiskCache struct {
-    root    string // the root directory of the file cache
-    tmpRoot string // the path where files are staged to before commiting to cache
+    root     string // the root directory of the file cache
+    tmpRoot  string // the path where files are staged to before commiting to cache
     compress bool
 }
 
 func NewDiskCache(root, tmp string, compress bool) *HierarchicalCache {
-    return NewHierarchicalCache(&DiskCache {
+    return NewHierarchicalCache(&DiskCache{
         root:     root,
         tmpRoot:  tmp,
         compress: compress,
@@ -24,10 +24,16 @@ func NewDiskCache(root, tmp string, compress bool) *HierarchicalCache {
 }
 
 func (dc *DiskCache) Delete(path string, metadta interface{}) error {
-    return os.Remove(path)
+    fullPath := filepath.Join(dc.root, path)
+
+    Log.Debug("DiskCache::Delete %s", fullPath)
+
+    return os.Remove(fullPath)
 }
 
 func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
+    Log.Debug("DiskCache::Get %s", path)
+
     // try getting from this cache
     fullPath := filepath.Join(dc.root, path)
     f, err := os.Open(fullPath)
@@ -41,7 +47,7 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
                     err,
                 )
             } else {
-                return NewSafeReader(zr), err
+                return NewSafeReader(zr, f), err
             }
         } else {
             return NewSafeReader(f), err
@@ -53,6 +59,8 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
 }
 
 func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) error {
+    Log.Debug("DiskCache::Put %s", path)
+
     // write to a tmp file first
     err := os.MkdirAll(dc.tmpRoot, 0770)
     if err != nil {
@@ -64,20 +72,28 @@ func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) erro
         return err
     }
 
-    var writer io.WriteCloser
     if dc.compress {
-        writer = zlib.NewWriter(f)
-    } else {
-        writer = f
-    }
+        writer := zlib.NewWriter(f)
 
-    _, err = io.Copy(writer, data)
-    if err != nil {
+        _, err = io.Copy(writer, data)
+        if err != nil {
+            writer.Close()
+            f.Close()
+            return err
+        }
+
         writer.Close()
-        return err
+        f.Close()
+    } else {
+        _, err = io.Copy(f, data)
+        if err != nil {
+            f.Close()
+            return err
+        }
+
+        f.Close()
     }
 
-    writer.Close()
     return dc.commit(f.Name(), path)
 }
 
