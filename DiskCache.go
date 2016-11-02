@@ -9,11 +9,21 @@ import (
 )
 
 type DiskCache struct {
-    Root    string // the root directory of the file cache
-    TmpRoot string // the path where files are staged to before commiting to cache
+    root    string // the root directory of the file cache
+    tmpRoot string // the path where files are staged to before commiting to cache
 
     children []ReadCache
+    compress bool
     lock     sync.RWMutex
+}
+
+func NewDiskCache(root, tmp string, compress bool) *DiskCache {
+    return &DiskCache{
+        root:     root,
+        tmpRoot:  tmp,
+        compress: compress,
+        children: make([]ReadCache, 0),
+    }
 }
 
 func (dc *DiskCache) AddChild(child ReadCache) {
@@ -43,7 +53,7 @@ func (dc *DiskCache) ChildrenCount() int {
 
 func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
     // try getting from this cache
-    fullPath := filepath.Join(dc.Root, path)
+    fullPath := filepath.Join(dc.root, path)
     f, err := os.Open(fullPath)
     if err == nil {
         return NewSafeReader(f), err
@@ -69,12 +79,12 @@ func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) erro
     defer dc.lock.Unlock()
 
     // write to a tmp file first
-    err := os.MkdirAll(dc.TmpRoot, 0770)
+    err := os.MkdirAll(dc.tmpRoot, 0770)
     if err != nil {
         return err
     }
 
-    f, err := ioutil.TempFile(dc.TmpRoot, "")
+    f, err := ioutil.TempFile(dc.tmpRoot, "")
     if err != nil {
         return err
     }
@@ -90,7 +100,7 @@ func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) erro
 }
 
 func (dc *DiskCache) commit(tmpPath, path string) error {
-    fullPath := filepath.Join(dc.Root, path)
+    fullPath := filepath.Join(dc.root, path)
 
     err := os.MkdirAll(filepath.Dir(fullPath), 0770)
     if err != nil {

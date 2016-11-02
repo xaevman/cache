@@ -71,15 +71,8 @@ func TestSafeReader(t *testing.T) {
 }
 
 func TestDiskCacheChildren(t *testing.T) {
-    dc1 := &DiskCache{
-        Root:    "cache1",
-        TmpRoot: "tmp1",
-    }
-
-    dc2 := &DiskCache{
-        Root:    "cache2",
-        TmpRoot: "tmp2",
-    }
+    dc1 := NewDiskCache("cache1", "tmp1", false)
+    dc2 := NewDiskCache("cache2", "tmp2", false)
 
     dc1.AddChild(dc2)
     if dc1.ChildrenCount() != 1 {
@@ -93,10 +86,7 @@ func TestDiskCacheChildren(t *testing.T) {
 }
 
 func TestDiskCachePut(t *testing.T) {
-    dc := &DiskCache{
-        Root:    "cache1",
-        TmpRoot: "tmp1",
-    }
+    dc := NewDiskCache("cache1", "tmp1", false)
 
     f, err := os.Open(TestFilePath)
     if err != nil {
@@ -110,7 +100,7 @@ func TestDiskCachePut(t *testing.T) {
         t.Fatalf("Error: %v", err)
     }
 
-    fullPath := filepath.Join(dc.Root, TestCachePath)
+    fullPath := filepath.Join("cache1", TestCachePath)
     f2, err := os.Open(fullPath)
     if err != nil {
         t.Fatalf("Error: %v", err)
@@ -120,10 +110,7 @@ func TestDiskCachePut(t *testing.T) {
 }
 
 func TestDiskCacheGet(t *testing.T) {
-    dc := &DiskCache{
-        Root:    "cache1",
-        TmpRoot: "tmp1",
-    }
+    dc := NewDiskCache("cache1", "tmp1", false)
 
     reader, err := dc.Get(TestCachePath, nil)
     if err != nil {
@@ -134,15 +121,8 @@ func TestDiskCacheGet(t *testing.T) {
 }
 
 func TestCacheFiller(t *testing.T) {
-    dc1 := &DiskCache{
-        Root:    "cache1",
-        TmpRoot: "tmp1",
-    }
-
-    dc2 := &DiskCache{
-        Root:    "cache2",
-        TmpRoot: "tmp2",
-    }
+    dc1 := NewDiskCache("cache1", "tmp1", false)
+    dc2 := NewDiskCache("cache2", "tmp2", false)
 
     // previous tests should have populated the r1 cache
     r1, err := dc1.Get(TestCachePath, nil)
@@ -166,15 +146,8 @@ func TestCacheFiller(t *testing.T) {
 }
 
 func TestChildFill(t *testing.T) {
-    dc1 := &DiskCache{
-        Root:    "cache1",
-        TmpRoot: "tmp1",
-    }
-
-    dc3 := &DiskCache{
-        Root:    "cache3",
-        TmpRoot: "tmp3",
-    }
+    dc1 := NewDiskCache("cache1", "tmp1", false)
+    dc3 := NewDiskCache("cache3", "tmp3", false)
 
     dc3.AddChild(dc1)
 
@@ -199,10 +172,7 @@ func TestChildFill(t *testing.T) {
 }
 
 func TestDataNotFound(t *testing.T) {
-    dc1 := &DiskCache{
-        Root:    "cache1",
-        TmpRoot: "tmp1",
-    }
+    dc1 := NewDiskCache("cache1", "tmp1", false)
 
     _, err := dc1.Get("notreal.file", nil)
     if err == nil {
