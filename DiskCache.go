@@ -7,12 +7,18 @@ import (
     "io/ioutil"
     "os"
     "path/filepath"
+    "time"
+)
+
+const (
+    FsMaxRetries       = 3
+    FsRetryIntervalSec = 1
 )
 
 type DiskCache struct {
+    compress bool
     root     string // the root directory of the file cache
     tmpRoot  string // the path where files are staged to before commiting to cache
-    compress bool
 }
 
 func NewDiskCache(root, tmp string, compress bool) *HierarchicalCache {
@@ -28,7 +34,22 @@ func (dc *DiskCache) Delete(path string, metadta interface{}) error {
 
     Log.Debug("DiskCache::Delete %s", fullPath)
 
-    return os.Remove(fullPath)
+    retries := 0
+    var err error
+
+    for retries < FsMaxRetries {
+        err = os.Remove(fullPath)
+        if err == nil || os.IsNotExist(err) {
+            return nil
+        }
+
+        Log.Debug("Delete %s failed (retry %d): %v", path, retries, err)
+        retries++
+
+        <-time.After(time.Duration(FsRetryIntervalSec) * time.Second)
+    }
+
+    return err
 }
 
 func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
@@ -36,22 +57,32 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
 
     // try getting from this cache
     fullPath := filepath.Join(dc.root, path)
-    f, err := os.Open(fullPath)
-    if err == nil {
-        if dc.compress {
-            zr, err := zlib.NewReader(f)
-            if err != nil {
-                return nil, fmt.Errorf(
-                    "Cache file found (%s) but decompression failed: %v",
-                    path,
-                    err,
-                )
+
+    retries := 0
+
+    for retries < FsMaxRetries {
+        f, err := os.Open(fullPath)
+        if err == nil || os.IsNotExist(err) {
+            if dc.compress {
+                zr, err := zlib.NewReader(f)
+                if err != nil {
+                    return nil, fmt.Errorf(
+                        "Cache file found (%s) but decompression failed: %v",
+                        path,
+                        err,
+                    )
+                } else {
+                    return NewSafeReader(zr, f), err
+                }
             } else {
-                return NewSafeReader(zr, f), err
+                return NewSafeReader(f, nil), err
             }
-        } else {
-            return NewSafeReader(f, nil), err
         }
+
+        Log.Debug("Open %s failed (retry %d): %v", path, retries, err)
+        retries++
+
+        <-time.After(time.Duration(FsRetryIntervalSec) * time.Second)
     }
 
     // not found
@@ -104,9 +135,21 @@ func (dc *DiskCache) commit(tmpPath, path string) error {
     if err != nil {
         return err
     }
-
-    err = os.Rename(tmpPath, fullPath)
     defer os.Remove(tmpPath)
+
+    retries := 0
+
+    for retries < FsMaxRetries {
+        err = os.Rename(tmpPath, fullPath)
+        if err == nil || os.IsNotExist(err) {
+            return nil
+        }
+
+        Log.Debug("Commit %s failed (retry %d): %v", path, retries, err)
+        retries++
+
+        <-time.After(time.Duration(FsRetryIntervalSec) * time.Second)
+    }
 
     return err
 }
