@@ -50,7 +50,7 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
                 return NewSafeReader(zr, f), err
             }
         } else {
-            return NewSafeReader(f), err
+            return NewSafeReader(f, nil), err
         }
     }
 

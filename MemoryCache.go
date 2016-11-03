@@ -45,7 +45,7 @@ func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) 
             return nil, err
         }
 
-        return zr, nil
+        return NewSafeReader(zr, nil), nil
     }
 
     return nil, ErrDataNotFound

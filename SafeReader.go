@@ -5,23 +5,24 @@ import (
 )
 
 type SafeReader struct {
-    readers []io.Reader
+    source io.ReadCloser
+    parent io.ReadCloser
 }
 
-func NewSafeReader(src ...io.Reader) io.Reader {
+func NewSafeReader(src, parent io.ReadCloser) io.Reader {
     return &SafeReader{
-        readers: src,
+        source: src,
+        parent: parent,
     }
 }
 
 func (sr *SafeReader) Read(p []byte) (int, error) {
-    c, err := sr.readers[0].Read(p)
+    c, err := sr.source.Read(p)
     if err == io.EOF {
-        for i := range sr.readers {
-            closer, ok := sr.readers[i].(io.Closer)
-            if ok {
-                closer.Close()
-            }
+        sr.source.Close()
+
+        if sr.parent != nil {
+            sr.parent.Close()
         }
     }
 

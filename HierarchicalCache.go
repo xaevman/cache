@@ -5,12 +5,15 @@ import (
     "fmt"
     "io"
     "sync"
+
+    "github.com/xaevman/crash"
 )
 
 type HierarchicalCache struct {
     deletethrough bool
     parentCache   RWCache
     readers       []ReadCache
+    sync          bool
     writers       []WriteCache
     writethrough  bool
     lock          sync.RWMutex
@@ -21,6 +24,7 @@ func NewHierarchicalCache(cache RWCache) *HierarchicalCache {
         deletethrough: false,
         parentCache:   cache,
         readers:       make([]ReadCache, 0),
+        sync:          false,
         writers:       make([]WriteCache, 0),
         writethrough:  true,
     }
@@ -33,11 +37,12 @@ func (hc *HierarchicalCache) SetDeleteThrough(enabled bool) {
     hc.deletethrough = enabled
 }
 
-func (hc *HierarchicalCache) SetWriteThrough(enabled bool) {
+func (hc *HierarchicalCache) SetWriteThrough(enabled, synchronous bool) {
     hc.lock.Lock()
     defer hc.lock.Unlock()
 
     hc.writethrough = enabled
+    hc.sync = synchronous
 }
 
 func (hc *HierarchicalCache) AddChild(child interface{}) error {
@@ -82,6 +87,8 @@ func (hc *HierarchicalCache) RemoveChild(child interface{}) {
 }
 
 func (hc *HierarchicalCache) Delete(key string, metadata interface{}) error {
+    Log.Debug("HierarchicalCache::Delete %s", key)
+
     err := hc.parentCache.Delete(key, metadata)
     if err != nil {
         return err
@@ -91,19 +98,34 @@ func (hc *HierarchicalCache) Delete(key string, metadata interface{}) error {
         hc.lock.Lock()
         defer hc.lock.Unlock()
 
-        for i := range hc.writers {
-            err := hc.writers[i].Delete(key, metadata)
-            if err != nil {
-                return err
-            }
+        var wg sync.WaitGroup
+        if hc.sync {
+            wg.Add(len(hc.writers))
         }
+
+        for i := range hc.writers {
+            go func() {
+                defer crash.HandleAll()
+                Log.Debug("HierarchicalCache::Delete %s, child %d", key, i)
+                err := hc.writers[i].Delete(key, metadata)
+                if err != nil {
+                    Log.Debug("Cache writethrough DELETE error: %v", err)
+                }
+
+                if hc.sync {
+                    wg.Done()
+                }
+            }()
+        }
+
+        wg.Wait()
     }
 
     return nil
 }
 
 func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, error) {
-    // try main cache
+    Log.Debug("HierarchicalCache::Get %s", key)
     data, err := hc.parentCache.Get(key, metadata)
     if err == nil {
         return data, err
@@ -116,7 +138,8 @@ func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, e
     for i := range hc.readers {
         data, err := hc.readers[i].Get(key, metadata)
         if err == nil {
-            return NewCacheFiller(key, metadata, hc, data), nil
+            Log.Debug("HierarchicalCache::Get %s, child %d", key, i)
+            return NewCacheFiller(key, metadata, hc.parentCache, data, hc.sync), nil
         }
     }
 
@@ -124,7 +147,9 @@ func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, e
     return nil, ErrDataNotFound
 }
 
-func (hc *HierarchicalCache) Put(path string, metadata interface{}, data io.Reader) error {
+func (hc *HierarchicalCache) Put(key string, metadata interface{}, data io.Reader) error {
+    Log.Debug("HierarchicalCache::Put %s", key)
+
     hc.lock.Lock()
     defer hc.lock.Unlock()
 
@@ -134,18 +159,34 @@ func (hc *HierarchicalCache) Put(path string, metadata interface{}, data io.Read
         return err
     }
 
-    err = hc.parentCache.Put(path, metadata, bytes.NewReader(buffer.Bytes()))
+    err = hc.parentCache.Put(key, metadata, bytes.NewReader(buffer.Bytes()))
     if err != nil {
         return err
     }
 
     if hc.writethrough {
-        for i := range hc.writers {
-            err = hc.writers[i].Put(path, metadata, bytes.NewReader(buffer.Bytes()))
-            if err != nil {
-                return err
-            }
+        var wg sync.WaitGroup
+        if hc.sync {
+            wg.Add(len(hc.writers))
         }
+
+        for i := range hc.writers {
+            go func() {
+                defer crash.HandleAll()
+
+                Log.Debug("HierarchicalCache::Put %s, child %d", key, i)
+                hc.writers[i].Put(key, metadata, bytes.NewReader(buffer.Bytes()))
+                if err != nil {
+                    Log.Debug("Cache writethrough PUT error: %v", err)
+                }
+
+                if hc.sync {
+                    wg.Done()
+                }
+            }()
+        }
+
+        wg.Wait()
     }
 
     return nil
