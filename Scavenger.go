@@ -42,6 +42,16 @@ func (s *Scavenger) Delete(key string, metadata interface{}) error {
     return s.parentCache.Delete(key, metadata)
 }
 
+func (s *Scavenger) Find(key string) bool {
+    Log.Debug("Scavenger::Find %s", key)
+
+    s.lock.RLock()
+    defer s.lock.RUnlock()
+
+    _, exists := s.data[key]
+    return exists
+}
+
 func (s *Scavenger) Get(key string, metadata interface{}) (io.Reader, error) {
     Log.Debug("Scavenger::Get %s", key)
 

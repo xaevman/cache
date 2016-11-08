@@ -89,6 +89,14 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
     return nil, ErrDataNotFound
 }
 
+func (dc *DiskCache) GetRoot() string {
+    return dc.root
+}
+
+func (dc *DiskCache) GetTmpRoot() string {
+    return dc.tmpRoot
+}
+
 func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) error {
     Log.Debug("DiskCache::Put %s", path)
 

@@ -147,6 +147,10 @@ func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, e
     return nil, ErrDataNotFound
 }
 
+func (hc *HierarchicalCache) GetParent() RWCache {
+    return hc.parentCache
+}
+
 func (hc *HierarchicalCache) Put(key string, metadata interface{}, data io.Reader) error {
     Log.Debug("HierarchicalCache::Put %s", key)
 
