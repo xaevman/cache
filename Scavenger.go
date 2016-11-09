@@ -31,15 +31,27 @@ func NewScavenger(parent RWCache, intervalSec, maxAgeSec int) *Scavenger {
     return ns
 }
 
+func (s *Scavenger) Touch(key string) {
+    s.lock.Lock()
+    defer s.lock.Unlock()
+
+    s.data[key] = time.Now()
+}
+
 func (s *Scavenger) Delete(key string, metadata interface{}) error {
     Log.Debug("Scavenger::Delete %s", key)
 
     s.lock.Lock()
     defer s.lock.Unlock()
 
-    delete(s.data, key)
+    err := s.parentCache.Delete(key, metadata)
 
-    return s.parentCache.Delete(key, metadata)
+    if err != nil {
+        return err
+    }
+
+    delete(s.data, key)
+    return nil
 }
 
 func (s *Scavenger) Find(key string) bool {
@@ -58,9 +70,14 @@ func (s *Scavenger) Get(key string, metadata interface{}) (io.Reader, error) {
     s.lock.RLock()
     defer s.lock.RUnlock()
 
+    reader, err := s.parentCache.Get(key, metadata)
+    if err != nil {
+        return nil, err
+    }
+
     s.data[key] = time.Now()
 
-    return s.parentCache.Get(key, metadata)
+    return reader, err
 }
 
 func (s *Scavenger) Put(key string, metadata interface{}, data io.Reader) error {
@@ -69,9 +86,13 @@ func (s *Scavenger) Put(key string, metadata interface{}, data io.Reader) error 
     s.lock.Lock()
     defer s.lock.Unlock()
 
-    s.data[key] = time.Now()
+    err := s.parentCache.Put(key, metadata, data)
+    if err != nil {
+        return err
+    }
 
-    return s.parentCache.Put(key, metadata, data)
+    s.data[key] = time.Now()
+    return nil
 }
 
 func (s *Scavenger) Shutdown() {

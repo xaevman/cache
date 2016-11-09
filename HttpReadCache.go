@@ -52,10 +52,17 @@ func (hc *HttpReadCache) Get(path string, metadata interface{}) (io.Reader, erro
             break
         }
 
+        if err != nil {
+            Log.Debug("HTTP error: %v", err)
+        } else {
+            Log.Debug("HTTP error %d (%s)", resp.StatusCode, resp.Status)
+        }
+
         <-time.After(HttpRetryIntervalSec * time.Second)
     }
 
     if resp != nil && resp.StatusCode >= 400 {
+        Log.Debug("HTTP error %d (%s)", resp.StatusCode, resp.Status)
         return nil, http.ErrMissingFile
     }
 
