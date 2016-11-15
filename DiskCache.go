@@ -97,43 +97,45 @@ func (dc *DiskCache) GetTmpRoot() string {
     return dc.tmpRoot
 }
 
-func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) error {
+func (dc *DiskCache) Put(path string, metadata interface{}, data io.Reader) (int64, error) {
     Log.Debug("DiskCache::Put %s", path)
 
     // write to a tmp file first
     err := os.MkdirAll(dc.tmpRoot, 0770)
     if err != nil {
-        return err
+        return 0, err
     }
 
     f, err := ioutil.TempFile(dc.tmpRoot, "")
     if err != nil {
-        return err
+        return 0, err
     }
+
+    var count int64
 
     if dc.compress {
         writer := zlib.NewWriter(f)
 
-        _, err = io.Copy(writer, data)
+        count, err = io.Copy(writer, data)
         if err != nil {
             writer.Close()
             f.Close()
-            return err
+            return 0, err
         }
 
         writer.Close()
         f.Close()
     } else {
-        _, err = io.Copy(f, data)
+        count, err = io.Copy(f, data)
         if err != nil {
             f.Close()
-            return err
+            return 0, err
         }
 
         f.Close()
     }
 
-    return dc.commit(f.Name(), path)
+    return count, dc.commit(f.Name(), path)
 }
 
 func (dc *DiskCache) commit(tmpPath, path string) error {

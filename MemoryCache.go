@@ -51,16 +51,16 @@ func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) 
     return nil, ErrDataNotFound
 }
 
-func (mc *MemoryCache) Put(key string, metadata interface{}, data io.Reader) error {
+func (mc *MemoryCache) Put(key string, metadata interface{}, data io.Reader) (int64, error) {
     Log.Debug("MemoryCache::Put %s", key)
 
     var buffer bytes.Buffer
     writer := zlib.NewWriter(&buffer)
-    _, err := io.Copy(writer, data)
+    c, err := io.Copy(writer, data)
     writer.Close()
 
     if err != nil {
-        return err
+        return 0, err
     }
 
     mc.lock.Lock()
@@ -68,5 +68,5 @@ func (mc *MemoryCache) Put(key string, metadata interface{}, data io.Reader) err
 
     mc.data[key] = &buffer
 
-    return nil
+    return c, nil
 }

@@ -151,7 +151,7 @@ func (hc *HierarchicalCache) GetParent() RWCache {
     return hc.parentCache
 }
 
-func (hc *HierarchicalCache) Put(key string, metadata interface{}, data io.Reader) error {
+func (hc *HierarchicalCache) Put(key string, metadata interface{}, data io.Reader) (int64, error) {
     Log.Debug("HierarchicalCache::Put %s", key)
 
     hc.lock.Lock()
@@ -160,12 +160,12 @@ func (hc *HierarchicalCache) Put(key string, metadata interface{}, data io.Reade
     var buffer bytes.Buffer
     _, err := io.Copy(&buffer, data)
     if err != nil {
-        return err
+        return 0, err
     }
 
-    err = hc.parentCache.Put(key, metadata, bytes.NewReader(buffer.Bytes()))
+    c, err := hc.parentCache.Put(key, metadata, bytes.NewReader(buffer.Bytes()))
     if err != nil {
-        return err
+        return 0, err
     }
 
     if hc.writethrough {
@@ -193,5 +193,5 @@ func (hc *HierarchicalCache) Put(key string, metadata interface{}, data io.Reade
         wg.Wait()
     }
 
-    return nil
+    return c, nil
 }

@@ -2,40 +2,60 @@ package cache
 
 import (
     "io"
+    "sort"
     "sync"
     "time"
-
-    "github.com/xaevman/crash"
 )
 
-type Scavenger struct {
-    data        map[string]time.Time
-    intervalSec int
-    lock        sync.RWMutex
-    maxAgeSec   int
-    parentCache RWCache
-    shutdown    chan chan interface{}
+type DataRecord struct {
+    Key      string
+    LastRead time.Time
+    Size     int64
 }
 
-func NewScavenger(parent RWCache, intervalSec, maxAgeSec int) *Scavenger {
-    ns := &Scavenger{
-        data:        make(map[string]time.Time),
-        intervalSec: intervalSec,
-        maxAgeSec:   maxAgeSec,
-        parentCache: parent,
-        shutdown:    make(chan chan interface{}, 0),
-    }
+type ByLastReadAsc []*DataRecord
 
-    ns.run()
+func (dr ByLastReadAsc) Len() int           { return len(dr) }
+func (dr ByLastReadAsc) Swap(i, j int)      { dr[i], dr[j] = dr[j], dr[i] }
+func (dr ByLastReadAsc) Less(i, j int) bool { return dr[i].LastRead.Before(dr[j].LastRead) }
+
+type Scavenger struct {
+    data        map[string]*DataRecord
+    dataList    []*DataRecord
+    lock        sync.RWMutex
+    maxSize     int64
+    currentSize int64
+    parentCache RWCache
+}
+
+func NewScavenger(parent RWCache, maxSize int64) *Scavenger {
+    ns := &Scavenger{
+        data:        make(map[string]*DataRecord),
+        dataList:    make([]*DataRecord, 0),
+        maxSize:     maxSize,
+        currentSize: 0,
+        parentCache: parent,
+    }
 
     return ns
 }
 
-func (s *Scavenger) Touch(key string) {
+func (s *Scavenger) Touch(key string, size int64) {
     s.lock.Lock()
     defer s.lock.Unlock()
 
-    s.data[key] = time.Now()
+    val, ok := s.data[key]
+    if !ok {
+        s.data[key] = &DataRecord{
+            Key:  key,
+            Size: size,
+        }
+        val = s.data[key]
+        s.dataList = append(s.dataList, val)
+    }
+
+    val.LastRead = time.Now()
+    s.currentSize += size
 }
 
 func (s *Scavenger) Delete(key string, metadata interface{}) error {
@@ -44,14 +64,7 @@ func (s *Scavenger) Delete(key string, metadata interface{}) error {
     s.lock.Lock()
     defer s.lock.Unlock()
 
-    err := s.parentCache.Delete(key, metadata)
-
-    if err != nil {
-        return err
-    }
-
-    delete(s.data, key)
-    return nil
+    return s.delete(key, metadata)
 }
 
 func (s *Scavenger) Find(key string) bool {
@@ -75,77 +88,110 @@ func (s *Scavenger) Get(key string, metadata interface{}) (io.Reader, error) {
         return nil, err
     }
 
-    s.data[key] = time.Now()
+    val, ok := s.data[key]
+    if !ok {
+        s.data[key] = &DataRecord{
+            Key: key,
+        }
+        val = s.data[key]
+        s.dataList = append(s.dataList, val)
+    }
+
+    val.LastRead = time.Now()
 
     return reader, err
 }
 
-func (s *Scavenger) Put(key string, metadata interface{}, data io.Reader) error {
+func (s *Scavenger) Put(key string, metadata interface{}, data io.Reader) (int64, error) {
     Log.Debug("Scavenger::Put %s", key)
 
     s.lock.Lock()
     defer s.lock.Unlock()
 
-    err := s.parentCache.Put(key, metadata, data)
+    c, err := s.parentCache.Put(key, metadata, data)
+    if err != nil {
+        return 0, err
+    }
+
+    val, ok := s.data[key]
+    if !ok {
+        s.data[key] = &DataRecord{
+            Key: key,
+        }
+        val = s.data[key]
+        s.dataList = append(s.dataList, val)
+    }
+
+    val.LastRead = time.Now()
+    val.Size = c
+    s.currentSize += c
+
+    Log.Debug("Scavenger::CurrentSize %d (%d max)", s.currentSize, s.maxSize)
+
+    if s.currentSize > s.maxSize {
+        s.scavenge()
+    }
+
+    return c, nil
+}
+
+func (s *Scavenger) Size() int64 {
+    s.lock.RLock()
+    defer s.lock.RUnlock()
+
+    return s.currentSize
+}
+
+func (s *Scavenger) delete(key string, metadata interface{}) error {
+    err := s.parentCache.Delete(key, metadata)
+
     if err != nil {
         return err
     }
 
-    s.data[key] = time.Now()
+    val, ok := s.data[key]
+    if !ok {
+        return nil
+    }
+
+    index := -1
+    for i := range s.dataList {
+        if s.dataList[i] == val {
+            index = i
+        }
+    }
+
+    if index > -1 {
+        s.dataList = append(s.dataList[:index], s.dataList[index+1:]...)
+    }
+
+    s.currentSize -= val.Size
+
+    delete(s.data, key)
+
     return nil
 }
 
-func (s *Scavenger) Shutdown() {
-    scc := make(chan interface{}, 0)
-
-    // signal shutdown
-    Log.Debug("Signaling shutdown")
-    s.shutdown <- scc
-
-    // wait for shutdown to complete
-    Log.Debug("Shutdown complete")
-    <-scc
-}
-
 func (s *Scavenger) scavenge() {
-    s.lock.Lock()
-    s.lock.Unlock()
-
-    Log.Debug("Scavenging cache records")
+    Log.Debug("Scavenging cache records...")
 
     deletes := make([]string, 0)
-    cutoff := time.Now().Add(-time.Duration(s.maxAgeSec) * time.Second)
 
-    for k := range s.data {
-        if s.data[k].Before(cutoff) {
-            deletes = append(deletes, k)
+    // sort by last read time
+    sort.Sort(ByLastReadAsc(s.dataList))
+
+    // delete until below maxSize
+    targetSize := s.currentSize - s.maxSize
+    deleteSize := int64(0)
+    for i := range s.dataList {
+        deleteSize += s.dataList[i].Size
+        deletes = append(deletes, s.dataList[i].Key)
+        if deleteSize >= targetSize {
+            break
         }
     }
 
     for i := range deletes {
-        Log.Debug("Removing record %s", deletes[i])
-        delete(s.data, deletes[i])
-        s.parentCache.Delete(deletes[i], nil)
+        s.delete(deletes[i], nil)
     }
-}
-
-func (s *Scavenger) run() {
-    go func() {
-        defer crash.HandleAll()
-
-        // shutdown complete channel
-        run := true
-        var scc chan interface{}
-
-        for run {
-            select {
-            case <-time.After(time.Duration(s.intervalSec) * time.Second):
-                s.scavenge()
-            case scc = <-s.shutdown:
-                run = false
-            }
-        }
-
-        scc <- nil
-    }()
 }

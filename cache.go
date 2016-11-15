@@ -16,12 +16,12 @@ type ReadCache interface {
 }
 type WriteCache interface {
     Delete(key string, metadata interface{}) error
-    Put(key string, metadata interface{}, data io.Reader) error
+    Put(key string, metadata interface{}, data io.Reader) (int64, error)
 }
 type RWCache interface {
     Delete(key string, metadata interface{}) error
     Get(key string, metadata interface{}) (io.Reader, error)
-    Put(key string, metadata interface{}, data io.Reader) error
+    Put(key string, metadata interface{}, data io.Reader) (int64, error)
 }
 
 func init() {

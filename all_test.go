@@ -13,22 +13,25 @@
 package cache
 
 import (
+    "bytes"
     "crypto/rand"
     "crypto/sha1"
     "fmt"
     "io"
     "io/ioutil"
+    "net/http"
     "os"
     "path/filepath"
+    "strings"
     "testing"
-    "time"
 )
 
-const TestFileSize = 64 * 1024
+const (
+    TestFileSize = 64 * 1024
+    ScavMaxSize  = int64(1 * 1024 * 1024) // 1MB
+)
 
 var (
-    ScavIntervalSec  = 1
-    ScavMaxAgeSec    = 2
     TestFilePath     string
     TestFileHash     string
     TestCachePath    = filepath.Join("dir", "test.file")
@@ -91,6 +94,27 @@ func TestSafeReader(t *testing.T) {
     checkData(reader, t)
 }
 
+func TestDiskCacheGetRoots(t *testing.T) {
+    err := clean(1)
+    if err != nil {
+        t.Fatalf("Error cleaning: %v", err)
+    }
+
+    root := "root1"
+    tmpRoot := "tmp1"
+
+    c := NewDiskCache(root, tmpRoot, false)
+    dc := c.GetParent().(*DiskCache)
+
+    if dc.GetRoot() != root {
+        t.Fatalf("Invalid cache root (%s != %s)", dc.GetRoot(), root)
+    }
+
+    if dc.GetTmpRoot() != tmpRoot {
+        t.Fatalf("Invalid cache root (%s != %s)", dc.GetTmpRoot(), tmpRoot)
+    }
+}
+
 func TestDiskCacheChildren(t *testing.T) {
     dc1 := NewDiskCache("cache1", "tmp1", false)
     dc2 := NewDiskCache("cache2", "tmp2", false)
@@ -119,7 +143,7 @@ func TestDiskCachePut(t *testing.T) {
 
     reader := NewSafeReader(f, nil)
 
-    err = dc.Put(TestCachePath, nil, reader)
+    _, err = dc.Put(TestCachePath, nil, reader)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
@@ -149,6 +173,62 @@ func TestDiskCacheGet(t *testing.T) {
     }
 
     checkData(reader, t)
+}
+
+func TestDiskCacheRetries(t *testing.T) {
+    dc := NewDiskCache("cache1", "tmp1", false)
+    tmp := dc.GetParent().(*DiskCache)
+
+    data := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+    reader := bytes.NewReader(data)
+
+    // hold file lock
+    f, err := os.OpenFile(filepath.Join(tmp.GetRoot(), TestCachePath), os.O_RDWR, 0660)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    defer f.Close()
+
+    err = dc.Delete(TestCachePath, nil)
+    if err == nil {
+        t.Fatalf("Deleting cache file wasn't supposed to succeed!", err)
+    }
+
+    _, err = dc.Put(TestCachePath, nil, reader)
+    if err == nil {
+        t.Fatalf("Error: %v", err)
+    }
+}
+
+func TestFsReadCache(t *testing.T) {
+    cache := &FsReadCache{}
+    path := filepath.Join("cache1", TestCachePath)
+    reader, err := cache.Get(path, nil)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    checkData(reader, t)
+}
+
+func TestHttpReadCache(t *testing.T) {
+    go http.ListenAndServe(":8888", http.FileServer(http.Dir("./cache1")))
+
+    uri := fmt.Sprintf("http://localhost:8888/%s", TestCachePath)
+    uri = strings.Replace(uri, "\\", "/", -1)
+
+    cache := &HttpReadCache{}
+    reader, err := cache.Get(uri, http.Header{})
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    checkData(reader, t)
+
+    _, err = cache.Get(uri, nil)
+    if err == nil {
+        t.Fatalf("Error: should have thrown error on nil header")
+    }
 }
 
 func TestCacheFiller(t *testing.T) {
@@ -218,7 +298,7 @@ func TestCompression(t *testing.T) {
 
     dc1 := NewDiskCache("cache1", "tmp1", true)
 
-    err = dc1.Put(TestCachePath, nil, reader)
+    _, err = dc1.Put(TestCachePath, nil, reader)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
@@ -283,7 +363,7 @@ func TestWriteThrough(t *testing.T) {
 
     reader := NewSafeReader(f, nil)
 
-    err = mc.Put(TestCachePath, nil, reader)
+    _, err = mc.Put(TestCachePath, nil, reader)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
@@ -318,62 +398,84 @@ func TestScavenger(t *testing.T) {
 
     cache := NewScavenger(
         mc,
-        ScavIntervalSec,
-        ScavMaxAgeSec,
+        ScavMaxSize,
     )
 
-    f, err := os.Open(TestFilePath)
+    fd, err := ioutil.ReadFile(TestFilePath)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
 
-    reader := NewSafeReader(f, nil)
+    origPath := fmt.Sprintf("%s0", TestCachePath)
 
-    // put a record in the cache
-    err = cache.Put(TestCachePath, nil, reader)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
+    cache.Touch(origPath, 1)
+    if cache.Size() != 1 {
+        t.Fatalf("Error, Touch of size 1 failed. Size mismatch (%d != %d)", cache.Size(), 1)
     }
 
-    // check to make sure it made it everywhere via write-through
-    data, err := dc.Get(TestCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-    checkData(data, t)
-
-    data, err = mc.Get(TestCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-    checkData(data, t)
-
-    data, err = cache.Get(TestCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-    checkData(data, t)
-
-    // wait for scavenger to run
-    <-time.After(time.Duration(ScavMaxAgeSec+2) * time.Second)
-
-    // record should be gone now
-    _, err = dc.Get(TestCachePath, nil)
-    if err == nil {
-        t.Fatal()
+    if !cache.Find(origPath) {
+        t.Fatalf("Error. Should have found key %s in cache", origPath)
     }
 
-    _, err = mc.Get(TestCachePath, nil)
-    if err == nil {
-        t.Fatal()
+    cache.Delete(origPath, nil)
+    if cache.Size() != 0 {
+        t.Fatalf("Error, Touch of size 1 failed. Size mismatch (%d != %d)", cache.Size(), 0)
     }
 
-    _, err = cache.Get(TestCachePath, nil)
-    if err == nil {
-        t.Fatal()
-    }
+    // should only be able to fit 16 copies of data in the 1MB cache before
+    // our first eviction occurs
+    for i := 0; i < 17; i++ {
+        cachePath := fmt.Sprintf("%s%d", TestCachePath, i)
+        reader := bytes.NewReader(fd)
 
-    cache.Shutdown()
+        // put a record in the cache
+        _, err = cache.Put(cachePath, nil, reader)
+        if err != nil {
+            t.Fatalf("Error: %v", err)
+        }
+
+        // check to make sure it made it everywhere via write-through
+        data, err := dc.Get(cachePath, nil)
+        if err != nil {
+            t.Fatalf("Error: %v", err)
+        }
+        checkData(data, t)
+
+        data, err = mc.Get(cachePath, nil)
+        if err != nil {
+            t.Fatalf("Error: %v", err)
+        }
+        checkData(data, t)
+
+        data, err = cache.Get(cachePath, nil)
+        if err != nil {
+            t.Fatalf("Error: %v", err)
+        }
+        checkData(data, t)
+
+        if i < 16 {
+            testSize := int64((i + 1) * TestFileSize)
+            if cache.Size() != testSize {
+                t.Fatalf("Error cache size mismatch (%d != %d)", cache.Size(), testSize)
+            }
+        } else {
+            // record should be gone now
+            _, err = dc.Get(origPath, nil)
+            if err == nil {
+                t.Fatal()
+            }
+
+            _, err = mc.Get(origPath, nil)
+            if err == nil {
+                t.Fatal()
+            }
+
+            _, err = cache.Get(origPath, nil)
+            if err == nil {
+                t.Fatal()
+            }
+        }
+    }
 }
 
 func TestScavengerDelete(t *testing.T) {
@@ -391,8 +493,7 @@ func TestScavengerDelete(t *testing.T) {
 
     cache := NewScavenger(
         mc,
-        ScavIntervalSec,
-        ScavMaxAgeSec,
+        ScavMaxSize,
     )
 
     f, err := os.Open(TestFilePath)
@@ -402,7 +503,7 @@ func TestScavengerDelete(t *testing.T) {
 
     reader := NewSafeReader(f, nil)
 
-    err = cache.Put(TestCachePath, nil, reader)
+    _, err = cache.Put(TestCachePath, nil, reader)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
@@ -443,8 +544,6 @@ func TestScavengerDelete(t *testing.T) {
     if err == nil {
         t.Fatal()
     }
-
-    cache.Shutdown()
 }
 
 func TestBigFile(t *testing.T) {
@@ -462,7 +561,7 @@ func TestBigFile(t *testing.T) {
 
     dc1 := NewDiskCache("cache1", "tmp1", true)
 
-    err = dc1.Put(BigFileCachePath, nil, reader)
+    _, err = dc1.Put(BigFileCachePath, nil, reader)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
