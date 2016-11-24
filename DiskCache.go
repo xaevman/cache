@@ -66,16 +66,28 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
             if dc.compress {
                 zr, err := zlib.NewReader(f)
                 if err != nil {
+                    f.Close()
                     return nil, fmt.Errorf(
                         "Cache file found (%s) but decompression failed: %v",
                         path,
                         err,
                     )
                 } else {
-                    return NewSafeReader(zr, f), err
+                    return NewSafeReader(-1, zr, f), err
                 }
             } else {
-                return NewSafeReader(f, nil), err
+                fi, err := f.Stat()
+                if err != nil {
+                    f.Close()
+                    return nil, fmt.Errorf(
+                        "Cache file found (%s) but stat failed: %v",
+                        path,
+                        err,
+                    )
+                }
+
+                Log.Debug("DiskCache data size %d", fi.Size())
+                return NewSafeReader(fi.Size(), f, nil), err
             }
         }
 

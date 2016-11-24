@@ -71,5 +71,5 @@ func (hc *HttpReadCache) Get(path string, metadata interface{}) (io.Reader, erro
         return nil, http.ErrMissingFile
     }
 
-    return NewSafeReader(resp.Body, nil), nil
+    return NewSafeReader(resp.ContentLength, resp.Body, nil), nil
 }

@@ -2,6 +2,7 @@ package cache
 
 import (
     "io"
+    "strings"
     "time"
 
     "github.com/Azure/azure-sdk-for-go/storage"
@@ -41,6 +42,23 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
 
     var err error
     var reader io.ReadCloser
+    var srcSize int64
+
+    var props *storage.BlobProperties
+    for i := 0; i < HttpMaxRetries; i++ {
+        props, err = arc.cli.GetBlobProperties(arc.container, path)
+        if err == nil {
+            srcSize = props.ContentLength
+            break
+        }
+
+        storErr := err.(storage.AzureStorageServiceError)
+        if storErr.StatusCode == 404 {
+            return arc.lcGet(strings.ToLower(path), metadata)
+        }
+
+        <-time.After(HttpRetryIntervalSec * time.Second)
+    }
 
     for i := 0; i < HttpMaxRetries; i++ {
         reader, err = arc.cli.GetBlob(arc.container, path)
@@ -51,7 +69,8 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
         storErr := err.(storage.AzureStorageServiceError)
 
         if storErr.StatusCode == 404 {
-            return nil, err
+            // try forcing lower case for case-insensitive search
+            return arc.lcGet(strings.ToLower(path), metadata)
         }
 
         <-time.After(HttpRetryIntervalSec * time.Second)
@@ -61,5 +80,54 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
         return nil, err
     }
 
-    return NewSafeReader(reader, nil), nil
+    return NewSafeReader(srcSize, reader, nil), nil
+}
+
+func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (io.Reader, error) {
+    Log.Debug("AzureReadCache::lcGet %s", path)
+
+    var err error
+    var reader io.ReadCloser
+    var srcSize int64
+
+    var props *storage.BlobProperties
+    for i := 0; i < HttpMaxRetries; i++ {
+        props, err = arc.cli.GetBlobProperties(arc.container, path)
+        if err == nil {
+            srcSize = props.ContentLength
+            break
+        }
+
+        storErr := err.(storage.AzureStorageServiceError)
+        if storErr.StatusCode == 404 {
+            break
+        }
+
+        <-time.After(HttpRetryIntervalSec * time.Second)
+    }
+
+    if err != nil {
+        return nil, err
+    }
+
+    for i := 0; i < HttpMaxRetries; i++ {
+        reader, err = arc.cli.GetBlob(arc.container, path)
+        if err == nil {
+            break
+        }
+
+        storErr := err.(storage.AzureStorageServiceError)
+
+        if storErr.StatusCode == 404 {
+            break
+        }
+
+        <-time.After(HttpRetryIntervalSec * time.Second)
+    }
+
+    if err != nil {
+        return nil, err
+    }
+
+    return NewSafeReader(srcSize, reader, nil), nil
 }

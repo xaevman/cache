@@ -8,13 +8,15 @@ import (
 )
 
 type MemoryCache struct {
-    data map[string]*bytes.Buffer
-    lock sync.RWMutex
+    data     map[string]*bytes.Buffer
+    dataSize map[string]int64
+    lock     sync.RWMutex
 }
 
 func NewMemoryCache() *HierarchicalCache {
     return NewHierarchicalCache(&MemoryCache{
-        data: make(map[string]*bytes.Buffer),
+        data:     make(map[string]*bytes.Buffer),
+        dataSize: make(map[string]int64),
     })
 }
 
@@ -25,6 +27,7 @@ func (mc *MemoryCache) Delete(key string, metadata interface{}) error {
     defer mc.lock.Unlock()
 
     delete(mc.data, key)
+    delete(mc.dataSize, key)
 
     return nil
 }
@@ -36,19 +39,24 @@ func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) 
     defer mc.lock.RUnlock()
 
     data, ok := mc.data[key]
-    if ok {
-        dst := make([]byte, data.Len())
-        copy(dst, data.Bytes())
-
-        zr, err := zlib.NewReader(bytes.NewReader(dst))
-        if err != nil {
-            return nil, err
-        }
-
-        return NewSafeReader(zr, nil), nil
+    if !ok {
+        return nil, ErrDataNotFound
     }
 
-    return nil, ErrDataNotFound
+    dataSize, ok := mc.dataSize[key]
+    if !ok {
+        return nil, ErrDataNotFound
+    }
+
+    dst := make([]byte, data.Len())
+    copy(dst, data.Bytes())
+
+    zr, err := zlib.NewReader(bytes.NewReader(dst))
+    if err != nil {
+        return nil, err
+    }
+
+    return NewSafeReader(dataSize, zr, nil), nil
 }
 
 func (mc *MemoryCache) Put(key string, metadata interface{}, data io.Reader) (int64, error) {
@@ -67,6 +75,7 @@ func (mc *MemoryCache) Put(key string, metadata interface{}, data io.Reader) (in
     defer mc.lock.Unlock()
 
     mc.data[key] = &buffer
+    mc.dataSize[key] = c
 
     return c, nil
 }

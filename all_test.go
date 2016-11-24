@@ -88,8 +88,13 @@ func TestSafeReader(t *testing.T) {
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
     checkData(reader, t)
 }
@@ -140,8 +145,13 @@ func TestDiskCachePut(t *testing.T) {
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
     _, err = dc.Put(TestCachePath, nil, reader)
     if err != nil {
@@ -153,8 +163,13 @@ func TestDiskCachePut(t *testing.T) {
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err = f2.Stat()
+    if err != nil {
+        f2.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    checkData(NewSafeReader(f2, nil), t)
+    checkData(NewSafeReader(fi.Size(), f2, nil), t)
 
     data, err := dc.Get(TestCachePath, nil)
     if err != nil {
@@ -231,36 +246,10 @@ func TestHttpReadCache(t *testing.T) {
     }
 }
 
-func TestCacheFiller(t *testing.T) {
-    dc1 := NewDiskCache("cache1", "tmp1", false)
-    dc2 := NewDiskCache("cache2", "tmp2", false)
-
-    // previous tests should have populated the r1 cache
-    r1, err := dc1.Get(TestCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-
-    // use CacheFiller to fill the r2 cache with the reader
-    // from r1
-    cf := NewCacheFiller(TestCachePath, nil, dc2, r1, true)
-
-    checkData(cf, t)
-
-    // r2 cache should be full at this point
-    data, err := dc2.Get(TestCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-
-    checkData(data, t)
-}
-
 func TestChildFill(t *testing.T) {
     dc1 := NewDiskCache("cache1", "tmp1", false)
     dc3 := NewDiskCache("cache3", "tmp3", false)
 
-    dc3.SetWriteThrough(true, true)
     dc3.AddChild(dc1)
 
     // previous tests should have populated the dc1 cache
@@ -274,6 +263,9 @@ func TestChildFill(t *testing.T) {
     // check the returned data
     checkData(d1, t)
 
+    WaitForCacheFill(d1)
+
+    dc3.RemoveChild(dc1)
     d2, err := dc3.Get(TestCachePath, nil)
     if err != nil {
         t.Fatalf("Error: %v", err)
@@ -293,8 +285,13 @@ func TestCompression(t *testing.T) {
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
     dc1 := NewDiskCache("cache1", "tmp1", true)
 
@@ -324,7 +321,6 @@ func TestMemCache(t *testing.T) {
     dc := NewDiskCache("cache1", "tmp1", true)
     mc := NewMemoryCache()
 
-    mc.SetWriteThrough(true, true)
     mc.AddChild(dc)
 
     // should bubble up from file cache
@@ -335,6 +331,8 @@ func TestMemCache(t *testing.T) {
 
     // check the returned data
     checkData(d1, t)
+
+    WaitForCacheFill(d1)
 
     // should come from RAM
     mc.RemoveChild(dc)
@@ -348,20 +346,27 @@ func TestMemCache(t *testing.T) {
 }
 
 func TestWriteThrough(t *testing.T) {
-    clean(1)
+    err := clean(1)
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
 
     dc := NewDiskCache("cache1", "tmp1", true)
     mc := NewMemoryCache()
 
-    mc.SetWriteThrough(true, true)
     mc.AddChild(dc)
 
     f, err := os.Open(TestFilePath)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
     _, err = mc.Put(TestCachePath, nil, reader)
     if err != nil {
@@ -392,7 +397,6 @@ func TestScavenger(t *testing.T) {
     dc := NewDiskCache("cache1", "tmp1", false)
     mc := NewMemoryCache()
 
-    mc.SetWriteThrough(true, true)
     mc.SetDeleteThrough(true)
     mc.AddChild(dc)
 
@@ -487,7 +491,6 @@ func TestScavengerDelete(t *testing.T) {
     dc := NewDiskCache("cache1", "tmp1", false)
     mc := NewMemoryCache()
 
-    mc.SetWriteThrough(true, true)
     mc.SetDeleteThrough(true)
     mc.AddChild(dc)
 
@@ -500,8 +503,13 @@ func TestScavengerDelete(t *testing.T) {
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
     _, err = cache.Put(TestCachePath, nil, reader)
     if err != nil {
@@ -547,21 +555,31 @@ func TestScavengerDelete(t *testing.T) {
 }
 
 func TestBigFile(t *testing.T) {
-    err := clean(1)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
+    for i := 1; i < 3; i++ {
+        err := clean(i)
+        if err != nil {
+            t.Fatalf("Error: %v", err)
+        }
     }
 
     f, err := os.Open(BigFilePath)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        t.Fatalf("Error: %v", err)
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
-    dc1 := NewDiskCache("cache1", "tmp1", true)
+    dc1 := NewDiskCache("cache1", "tmp1", false)
+    dc2 := NewDiskCache("cache2", "tmp2", false)
 
-    _, err = dc1.Put(BigFileCachePath, nil, reader)
+    dc1.AddChild(dc2)
+
+    _, err = dc2.Put(BigFileCachePath, nil, reader)
     if err != nil {
         t.Fatalf("Error: %v", err)
     }
@@ -581,46 +599,29 @@ func TestBigFile(t *testing.T) {
         t.Fatalf("Error: Invalid file size (%d != %d)", c, BigFileSize)
     }
 
-    hashStr := fmt.Sprintf("%X", hash.Sum(nil))
-    if hashStr != BigFileHash {
-        t.Fatalf("Error: Sha mismatch (%s != %s)", hashStr, BigFileHash)
-    }
-}
-
-func TestBigFileCacheFiller(t *testing.T) {
-    err := clean(2)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-
-    dc1 := NewDiskCache("cache1", "tmp1", true)
-    dc2 := NewDiskCache("cache2", "tmp2", true)
-
-    data, err := dc1.Get(BigFileCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-
-    cf := NewCacheFiller(BigFileCachePath, nil, dc2, data, true)
-
-    hash := sha1.New()
-    c, err := io.Copy(hash, cf)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-
-    data, err = dc2.Get(BigFileCachePath, nil)
-    if err != nil {
-        t.Fatalf("Error: %v", err)
-    }
-
-    if c != BigFileSize {
-        t.Fatalf("Error: invalid size (%d != %d)", c, BigFileSize)
+    c2 := WaitForCacheFill(data)
+    if c2 != BigFileSize {
+        t.Fatalf("Error: Invalid fill size (%d != %d)", c2, BigFileSize)
     }
 
     hashStr := fmt.Sprintf("%X", hash.Sum(nil))
     if hashStr != BigFileHash {
         t.Fatalf("Error: Sha mismatch (%s != %s)", hashStr, BigFileHash)
+    }
+
+    f2, err := os.Open(filepath.Join(dc2.parentCache.(*DiskCache).GetRoot(), BigFileCachePath))
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+    defer f2.Close()
+
+    fi, err = f2.Stat()
+    if err != nil {
+        t.Fatalf("Error: %v", err)
+    }
+
+    if fi.Size() != BigFileSize {
+        t.Fatalf("Error validating write-through size (%d != %d)", fi.Size(), BigFileSize)
     }
 }
 
@@ -629,8 +630,13 @@ func bigFileSetup() error {
     if err != nil {
         return err
     }
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        return err
+    }
 
-    reader := NewSafeReader(f, nil)
+    reader := NewSafeReader(fi.Size(), f, nil)
 
     hash := sha1.New()
     c, err := io.Copy(hash, reader)

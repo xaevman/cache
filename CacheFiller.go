@@ -3,19 +3,19 @@ package cache
 import (
     "bytes"
     "io"
-    "sync"
+    "time"
 
     "github.com/xaevman/crash"
 )
 
 type CacheFiller struct {
-    buffer   bytes.Buffer
-    cache    WriteCache
-    data     io.Reader
-    metadata interface{}
-    path     string
-    tee      io.Reader
-    sync     bool
+    buffer       bytes.Buffer
+    cache        WriteCache
+    data         io.Reader
+    fillComplete chan int64
+    metadata     interface{}
+    path         string
+    tee          io.Reader
 }
 
 func NewCacheFiller(
@@ -23,14 +23,13 @@ func NewCacheFiller(
     metadata interface{},
     parent WriteCache,
     child io.Reader,
-    synchronous bool,
 ) *CacheFiller {
     cr := &CacheFiller{
-        cache:    parent,
-        data:     child,
-        metadata: metadata,
-        path:     path,
-        sync:     synchronous,
+        cache:        parent,
+        data:         child,
+        fillComplete: make(chan int64, 0),
+        metadata:     metadata,
+        path:         path,
     }
 
     cr.tee = io.TeeReader(cr.data, &cr.buffer)
@@ -38,26 +37,39 @@ func NewCacheFiller(
     return cr
 }
 
+func WaitForCacheFill(reader io.Reader) int64 {
+    cf, ok := reader.(*CacheFiller)
+    if !ok {
+        return 0
+    }
+
+    return <-cf.fillComplete
+}
+
 func (cf *CacheFiller) Read(p []byte) (int, error) {
     c, err := cf.tee.Read(p)
     if err == io.EOF {
         Log.Debug("EOF reached after %d bytes", cf.buffer.Len())
 
-        var wg sync.WaitGroup
-        if cf.sync {
-            wg.Add(1)
-        }
-
         go func() {
             defer crash.HandleAll()
-            cf.cache.Put(cf.path, cf.metadata, &cf.buffer)
+            defer close(cf.fillComplete)
 
-            if cf.sync {
-                wg.Done()
+            c, err := cf.cache.Put(cf.path, cf.metadata, &cf.buffer)
+            if err != nil {
+                Log.Debug("CacheFiller fill error %s: %v", cf.path, err)
+                return
+            }
+
+            select {
+            case cf.fillComplete <- c:
+                Log.Debug("fillComplete %s: %d bytes", cf.path, c)
+                break
+            case <-time.After(3 * time.Second):
+                Log.Debug("fillComplete event timeout (%s)", cf.path)
+                break
             }
         }()
-
-        wg.Wait()
     }
 
     return c, err

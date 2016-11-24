@@ -15,5 +15,11 @@ func (fc *FsReadCache) Get(path string, metadata interface{}) (io.Reader, error)
         return nil, err
     }
 
-    return NewSafeReader(f, nil), nil
+    fi, err := f.Stat()
+    if err != nil {
+        f.Close()
+        return nil, err
+    }
+
+    return NewSafeReader(fi.Size(), f, nil), nil
 }
