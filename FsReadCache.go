@@ -21,5 +21,7 @@ func (fc *FsReadCache) Get(path string, metadata interface{}) (io.Reader, error)
         return nil, err
     }
 
+    Log.Debug("Returning reader for %s (len %d)", path, fi.Size())
+
     return NewSafeReader(fi.Size(), f, nil), nil
 }

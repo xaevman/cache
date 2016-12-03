@@ -71,5 +71,7 @@ func (hc *HttpReadCache) Get(path string, metadata interface{}) (io.Reader, erro
         return nil, http.ErrMissingFile
     }
 
+    Log.Debug("Returning reader for %s (len %d)", path, resp.ContentLength)
+
     return NewSafeReader(resp.ContentLength, resp.Body, nil), nil
 }

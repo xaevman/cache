@@ -52,9 +52,15 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
             break
         }
 
-        storErr := err.(storage.AzureStorageServiceError)
-        if storErr.StatusCode == 404 {
+        storErr, ok := err.(storage.AzureStorageServiceError)
+        if ok {
+            if storErr.StatusCode == 404 {
+                return arc.lcGet(strings.ToLower(path), metadata)
+            }
+        } else if strings.Contains(err.Error(), "404") {
             return arc.lcGet(strings.ToLower(path), metadata)
+        } else {
+            Log.Debug("AzureReadCache get error (%s): %T %v", path, err, err)
         }
 
         <-time.After(HttpRetryIntervalSec * time.Second)
@@ -66,11 +72,15 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
             break
         }
 
-        storErr := err.(storage.AzureStorageServiceError)
-
-        if storErr.StatusCode == 404 {
-            // try forcing lower case for case-insensitive search
+        storErr, ok := err.(storage.AzureStorageServiceError)
+        if ok {
+            if storErr.StatusCode == 404 {
+                return arc.lcGet(strings.ToLower(path), metadata)
+            }
+        } else if strings.Contains(err.Error(), "404") {
             return arc.lcGet(strings.ToLower(path), metadata)
+        } else {
+            Log.Debug("AzureReadCache get error (%s): %T %v", path, err, err)
         }
 
         <-time.After(HttpRetryIntervalSec * time.Second)
@@ -79,6 +89,8 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
     if err != nil {
         return nil, err
     }
+
+    Log.Debug("Returning reader for %s (len %d)", path, srcSize)
 
     return NewSafeReader(srcSize, reader, nil), nil
 }
@@ -98,9 +110,15 @@ func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (io.Reader, 
             break
         }
 
-        storErr := err.(storage.AzureStorageServiceError)
-        if storErr.StatusCode == 404 {
+        storErr, ok := err.(storage.AzureStorageServiceError)
+        if ok {
+            if storErr.StatusCode == 404 {
+                break
+            }
+        } else if strings.Contains(err.Error(), "404") {
             break
+        } else {
+            Log.Debug("AzureReadCache get error (%s): %T %v", path, err, err)
         }
 
         <-time.After(HttpRetryIntervalSec * time.Second)
@@ -116,10 +134,15 @@ func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (io.Reader, 
             break
         }
 
-        storErr := err.(storage.AzureStorageServiceError)
-
-        if storErr.StatusCode == 404 {
+        storErr, ok := err.(storage.AzureStorageServiceError)
+        if ok {
+            if storErr.StatusCode == 404 {
+                break
+            }
+        } else if strings.Contains(err.Error(), "404") {
             break
+        } else {
+            Log.Debug("AzureReadCache get error (%s): %T %v", path, err, err)
         }
 
         <-time.After(HttpRetryIntervalSec * time.Second)

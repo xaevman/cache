@@ -56,6 +56,8 @@ func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) 
         return nil, err
     }
 
+    Log.Debug("Returning reader for %s (len %d)", key, dataSize)
+
     return NewSafeReader(dataSize, zr, nil), nil
 }
 
