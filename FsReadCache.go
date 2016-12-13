@@ -7,21 +7,21 @@ import (
 
 type FsReadCache struct{}
 
-func (fc *FsReadCache) Get(path string, metadata interface{}) (io.Reader, error) {
+func (fc *FsReadCache) Get(path string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("FsCache::Get %s", path)
 
     f, err := os.Open(path)
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     fi, err := f.Stat()
     if err != nil {
         f.Close()
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     Log.Debug("Returning reader for %s (len %d)", path, fi.Size())
 
-    return NewSafeReader(fi.Size(), f, nil), nil
+    return fi.Size(), NewSafeReader(fi.Size(), f, nil), nil
 }

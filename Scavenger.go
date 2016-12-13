@@ -56,6 +56,10 @@ func (s *Scavenger) Touch(key string, size int64) {
 
     val.LastRead = time.Now()
     s.currentSize += size
+
+    if s.currentSize > s.maxSize {
+        s.scavenge()
+    }
 }
 
 func (s *Scavenger) Delete(key string, metadata interface{}) error {
@@ -77,29 +81,31 @@ func (s *Scavenger) Find(key string) bool {
     return exists
 }
 
-func (s *Scavenger) Get(key string, metadata interface{}) (io.Reader, error) {
-    Log.Debug("Scavenger::Get %s", key)
+func (s *Scavenger) Get(key string, metadata interface{}) (int64, io.Reader, error) {
+    Log.Debug("Scavenger::Get %s (cache size %d)", key, s.Size())
 
     s.lock.RLock()
     defer s.lock.RUnlock()
 
-    reader, err := s.parentCache.Get(key, metadata)
+    count, reader, err := s.parentCache.Get(key, metadata)
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     val, ok := s.data[key]
-    if !ok {
-        s.data[key] = &DataRecord{
-            Key: key,
-        }
-        val = s.data[key]
-        s.dataList = append(s.dataList, val)
+    if ok {
+        val.LastRead = time.Now()
     }
+    // if !ok {
+    //     s.data[key] = &DataRecord{
+    //         Key: key,
+    //     }
+    //     val = s.data[key]
+    //     s.dataList = append(s.dataList, val)
+    //     s.currentSize += count
+    // }
 
-    val.LastRead = time.Now()
-
-    return reader, err
+    return count, reader, err
 }
 
 func (s *Scavenger) Put(key string, metadata interface{}, data io.Reader) (int64, error) {

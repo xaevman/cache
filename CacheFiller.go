@@ -58,6 +58,7 @@ func (cf *CacheFiller) Read(p []byte) (int, error) {
             c, err := cf.cache.Put(cf.path, cf.metadata, &cf.buffer)
             if err != nil {
                 Log.Debug("CacheFiller fill error %s: %v", cf.path, err)
+                cf.fillComplete <- CacheFillError
                 return
             }
 
@@ -65,8 +66,9 @@ func (cf *CacheFiller) Read(p []byte) (int, error) {
             case cf.fillComplete <- c:
                 Log.Debug("fillComplete %s: %d bytes", cf.path, c)
                 break
-            case <-time.After(3 * time.Second):
-                Log.Debug("fillComplete event timeout (%s)", cf.path)
+            case <-time.After(3 * time.Minute):
+                Log.Debug("fillComplete timeout (%s)", cf.path)
+                cf.fillComplete <- CacheFillTimeout
                 break
             }
         }()

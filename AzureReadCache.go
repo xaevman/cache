@@ -37,7 +37,7 @@ func NewAzureReadCache(account, key, container string) (*AzureReadCache, error) 
     return arc, nil
 }
 
-func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, error) {
+func (arc *AzureReadCache) Get(path string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("AzureReadCache::Get %s", path)
 
     var err error
@@ -87,15 +87,15 @@ func (arc *AzureReadCache) Get(path string, metadata interface{}) (io.Reader, er
     }
 
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     Log.Debug("Returning reader for %s (len %d)", path, srcSize)
 
-    return NewSafeReader(srcSize, reader, nil), nil
+    return srcSize, NewSafeReader(srcSize, reader, nil), nil
 }
 
-func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (io.Reader, error) {
+func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("AzureReadCache::lcGet %s", path)
 
     var err error
@@ -125,7 +125,7 @@ func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (io.Reader, 
     }
 
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     for i := 0; i < HttpMaxRetries; i++ {
@@ -149,8 +149,8 @@ func (arc *AzureReadCache) lcGet(path string, metadata interface{}) (io.Reader, 
     }
 
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
-    return NewSafeReader(srcSize, reader, nil), nil
+    return srcSize, NewSafeReader(srcSize, reader, nil), nil
 }

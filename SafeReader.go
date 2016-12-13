@@ -6,24 +6,24 @@ import (
 )
 
 type SafeReader struct {
-    srcSize  int64
+    ReadSize int64
+    SrcSize  int64
     source   io.Reader
     parent   io.Reader
-    readSize int64
 }
 
 func NewSafeReader(srcSize int64, src, parent io.Reader) io.Reader {
     return &SafeReader{
-        srcSize:  srcSize,
+        ReadSize: int64(0),
+        SrcSize:  srcSize,
         source:   src,
         parent:   parent,
-        readSize: int64(0),
     }
 }
 
 func (sr *SafeReader) Read(p []byte) (int, error) {
     c, err := sr.source.Read(p)
-    sr.readSize += int64(c)
+    sr.ReadSize += int64(c)
 
     if err == io.EOF {
         rc, ok := sr.source.(io.ReadCloser)
@@ -38,11 +38,11 @@ func (sr *SafeReader) Read(p []byte) (int, error) {
             }
         }
 
-        if sr.srcSize > -1 && sr.readSize != sr.srcSize {
+        if sr.SrcSize > -1 && sr.ReadSize != sr.SrcSize {
             return c, fmt.Errorf(
                 "read size mismatch (%d != %d)",
-                sr.readSize,
-                sr.srcSize,
+                sr.ReadSize,
+                sr.SrcSize,
             )
         }
     }

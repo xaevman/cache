@@ -19,12 +19,12 @@ var (
 
 type HttpReadCache struct{}
 
-func (hc *HttpReadCache) Get(path string, metadata interface{}) (io.Reader, error) {
+func (hc *HttpReadCache) Get(path string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("HttpReadCache::Get %s", path)
 
     header, ok := metadata.(http.Header)
     if !ok {
-        return nil, ErrInvalidHttpRequest
+        return GetLengthUnknown, nil, ErrInvalidHttpRequest
     }
 
     retryTxt := ""
@@ -33,7 +33,7 @@ func (hc *HttpReadCache) Get(path string, metadata interface{}) (io.Reader, erro
 
     proxyReq, err := http.NewRequest("GET", path, nil)
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     for k, v := range header {
@@ -63,15 +63,15 @@ func (hc *HttpReadCache) Get(path string, metadata interface{}) (io.Reader, erro
 
     if resp == nil {
         Log.Debug("HTTP GET %s: nil response received", path)
-        return nil, http.ErrMissingFile
+        return GetLengthUnknown, nil, http.ErrMissingFile
     }
 
     if resp.StatusCode >= 400 {
         Log.Debug("HTTP error %d (%s)", resp.StatusCode, resp.Status)
-        return nil, http.ErrMissingFile
+        return GetLengthUnknown, nil, http.ErrMissingFile
     }
 
     Log.Debug("Returning reader for %s (len %d)", path, resp.ContentLength)
 
-    return NewSafeReader(resp.ContentLength, resp.Body, nil), nil
+    return resp.ContentLength, NewSafeReader(resp.ContentLength, resp.Body, nil), nil
 }

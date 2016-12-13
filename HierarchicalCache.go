@@ -110,12 +110,12 @@ func (hc *HierarchicalCache) Delete(key string, metadata interface{}) error {
     return nil
 }
 
-func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, error) {
+func (hc *HierarchicalCache) Get(key string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("HierarchicalCache::Get %s", key)
 
-    data, err := hc.parentCache.Get(key, metadata)
+    count, data, err := hc.parentCache.Get(key, metadata)
     if err == nil {
-        return data, err
+        return count, data, err
     }
 
     hc.readerLock.Lock()
@@ -123,15 +123,15 @@ func (hc *HierarchicalCache) Get(key string, metadata interface{}) (io.Reader, e
 
     // failed - try children
     for i := range hc.readers {
-        data, err := hc.readers[i].Get(key, metadata)
+        count, data, err := hc.readers[i].Get(key, metadata)
         if err == nil {
             Log.Debug("HierarchicalCache::Get %s, child %d", key, i)
-            return NewCacheFiller(key, metadata, hc.parentCache, data), nil
+            return count, NewCacheFiller(key, metadata, hc.parentCache, data), nil
         }
     }
 
     // not found
-    return nil, ErrDataNotFound
+    return GetLengthUnknown, nil, ErrDataNotFound
 }
 
 func (hc *HierarchicalCache) GetParent() RWCache {

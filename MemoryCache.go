@@ -32,7 +32,7 @@ func (mc *MemoryCache) Delete(key string, metadata interface{}) error {
     return nil
 }
 
-func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) {
+func (mc *MemoryCache) Get(key string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("MemoryCache::Get %s", key)
 
     mc.lock.RLock()
@@ -40,12 +40,12 @@ func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) 
 
     data, ok := mc.data[key]
     if !ok {
-        return nil, ErrDataNotFound
+        return GetLengthUnknown, nil, ErrDataNotFound
     }
 
     dataSize, ok := mc.dataSize[key]
     if !ok {
-        return nil, ErrDataNotFound
+        return GetLengthUnknown, nil, ErrDataNotFound
     }
 
     dst := make([]byte, data.Len())
@@ -53,12 +53,12 @@ func (mc *MemoryCache) Get(key string, metadata interface{}) (io.Reader, error) 
 
     zr, err := zlib.NewReader(bytes.NewReader(dst))
     if err != nil {
-        return nil, err
+        return GetLengthUnknown, nil, err
     }
 
     Log.Debug("Returning reader for %s (len %d)", key, dataSize)
 
-    return NewSafeReader(dataSize, zr, nil), nil
+    return dataSize, NewSafeReader(dataSize, zr, nil), nil
 }
 
 func (mc *MemoryCache) Put(key string, metadata interface{}, data io.Reader) (int64, error) {

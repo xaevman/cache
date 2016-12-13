@@ -52,7 +52,7 @@ func (dc *DiskCache) Delete(path string, metadta interface{}) error {
     return err
 }
 
-func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
+func (dc *DiskCache) Get(path string, metadata interface{}) (int64, io.Reader, error) {
     Log.Debug("DiskCache::Get %s", path)
 
     // try getting from this cache
@@ -67,19 +67,19 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
                 zr, err := zlib.NewReader(f)
                 if err != nil {
                     f.Close()
-                    return nil, fmt.Errorf(
+                    return GetLengthUnknown, nil, fmt.Errorf(
                         "Cache file found (%s) but decompression failed: %v",
                         path,
                         err,
                     )
                 } else {
-                    return NewSafeReader(-1, zr, f), err
+                    return GetLengthUnknown, NewSafeReader(GetLengthUnknown, zr, f), err
                 }
             } else {
                 fi, err := f.Stat()
                 if err != nil {
                     f.Close()
-                    return nil, fmt.Errorf(
+                    return GetLengthUnknown, nil, fmt.Errorf(
                         "Cache file found (%s) but stat failed: %v",
                         path,
                         err,
@@ -87,7 +87,7 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
                 }
 
                 Log.Debug("DiskCache data size %d", fi.Size())
-                return NewSafeReader(fi.Size(), f, nil), err
+                return fi.Size(), NewSafeReader(fi.Size(), f, nil), err
             }
         }
 
@@ -98,7 +98,7 @@ func (dc *DiskCache) Get(path string, metadata interface{}) (io.Reader, error) {
     }
 
     // not found
-    return nil, ErrDataNotFound
+    return GetLengthUnknown, nil, ErrDataNotFound
 }
 
 func (dc *DiskCache) GetRoot() string {
